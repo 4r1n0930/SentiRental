@@ -1,0 +1,502 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  OWNER
+  PROPERTY_MANAGER
+  TENANT
+
+  @@map("user_role")
+}
+
+enum UserStatus {
+  PENDING_VERIFICATION
+  PENDING_ACTIVATION
+  ACTIVE
+  SUSPENDED
+  DISABLED
+
+  @@map("user_status")
+}
+
+enum AuthProvider {
+  CREDENTIALS
+  GOOGLE
+
+  @@map("auth_provider")
+}
+
+enum OAuthFlowPurpose {
+  LOGIN_STATE
+  LINK_STATE
+  EXCHANGE_CODE
+
+  @@map("oauth_flow_purpose")
+}
+
+enum TenantStatus {
+  APPLICANT
+  ACTIVE
+  NOTICE_PERIOD
+  MOVED_OUT
+  ARCHIVED
+
+  @@map("tenant_status")
+}
+
+enum KycStatus {
+  NOT_SUBMITTED
+  PENDING
+  VERIFIED
+  REJECTED
+  EXPIRED
+
+  @@map("kyc_status")
+}
+
+enum PropertyStatus {
+  ACTIVE
+  ARCHIVED
+
+  @@map("property_status")
+}
+
+enum PropertyType {
+  APARTMENT
+  HOUSE
+  BUILDING
+  TOWNHOUSE
+  COMMERCIAL
+  OTHER
+
+  @@map("property_type")
+}
+
+enum RoomType {
+  PRIVATE
+  SHARED
+  MASTER
+  DORMITORY
+  STUDIO
+  OTHER
+
+  @@map("room_type")
+}
+
+enum RoomOperationalStatus {
+  ACTIVE
+  MAINTENANCE
+  INACTIVE
+
+  @@map("room_operational_status")
+}
+
+enum AgreementStatus {
+  DRAFT
+  ACTIVE
+  EXPIRING
+  EXPIRED
+  TERMINATED
+
+  @@map("agreement_status")
+}
+
+enum ManagerPermission {
+  MANAGE_ROOMS
+  MANAGE_TENANTS
+  MANAGE_AGREEMENTS
+  MANAGE_RENT
+  VIEW_PAYMENTS
+  MANAGE_MAINTENANCE
+  MANAGE_INVENTORY
+  MANAGE_EXPENSES
+  MANAGE_DOCUMENTS
+  CREATE_ANNOUNCEMENTS
+  VIEW_ANALYTICS
+
+  @@map("manager_permission")
+}
+
+model User {
+  id                 String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email              String     @db.VarChar(320)
+  emailNormalized    String     @unique @db.VarChar(320)
+  firstName          String     @db.VarChar(100)
+  lastName           String?    @db.VarChar(100)
+  phone              String?    @db.VarChar(32)
+  role               UserRole
+  status             UserStatus @default(PENDING_VERIFICATION)
+  emailVerifiedAt    DateTime?  @db.Timestamptz(3)
+  authVersion        Int        @default(1)
+  lastLoginAt        DateTime?  @db.Timestamptz(3)
+  createdAt          DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime   @updatedAt @db.Timestamptz(3)
+
+  identities               AuthIdentity[]
+  refreshSessions          RefreshSession[]
+  emailVerificationTokens  EmailVerificationToken[]
+  passwordResetTokens      PasswordResetToken[]
+  oauthFlows               OAuthFlow[]
+  tenant                   Tenant?
+  ownedProperties          Property[]                 @relation("PropertyOwner")
+  createdProperties        Property[]                 @relation("PropertyCreatedBy")
+  managerAssignments       PropertyManagerAssignment[] @relation("ManagerUser")
+  createdManagerAssignments PropertyManagerAssignment[] @relation("ManagerAssignmentCreatedBy")
+  createdAgreements        RentalAgreement[]          @relation("AgreementCreatedBy")
+  addedRoomAmenities       RoomAmenity[]              @relation("RoomAmenityAddedBy")
+  auditLogs                AuditLog[]                 @relation("AuditActor")
+
+  @@index([role, status])
+  @@index([createdAt])
+  @@map("users")
+}
+
+model AuthIdentity {
+  id              String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId          String       @db.Uuid
+  provider        AuthProvider
+  providerKey     String       @unique @db.VarChar(320)
+  providerIssuer  String?      @db.VarChar(255)
+  providerSubject String?      @db.VarChar(255)
+  credentialHash  String?      @db.Text
+  providerEmail   String?      @db.VarChar(320)
+  lastUsedAt      DateTime?    @db.Timestamptz(3)
+  createdAt       DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime     @updatedAt @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([provider, providerIssuer, providerSubject])
+  @@unique([userId, provider])
+  @@map("auth_identities")
+}
+
+model RefreshSession {
+  id                    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId                String    @db.Uuid
+  familyId              String    @db.Uuid
+  tokenHash             String    @unique @db.Char(64)
+  parentSessionId       String?   @db.Uuid
+  replacedBySessionId   String?   @db.Uuid
+  expiresAt             DateTime  @db.Timestamptz(3)
+  usedAt                DateTime? @db.Timestamptz(3)
+  revokedAt             DateTime? @db.Timestamptz(3)
+  revocationReason      String?   @db.VarChar(100)
+  ipAddress             String?   @db.VarChar(64)
+  userAgent             String?   @db.VarChar(512)
+  createdAt             DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime  @updatedAt @db.Timestamptz(3)
+
+  user              User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parentSession     RefreshSession? @relation("RefreshSessionParent", fields: [parentSessionId], references: [id], onDelete: SetNull)
+  childSessions     RefreshSession[] @relation("RefreshSessionParent")
+  replacedBySession RefreshSession? @relation("RefreshSessionReplacement", fields: [replacedBySessionId], references: [id], onDelete: SetNull)
+  replacementParents RefreshSession[] @relation("RefreshSessionReplacement")
+
+  @@index([userId, revokedAt])
+  @@index([familyId])
+  @@index([expiresAt])
+  @@map("refresh_sessions")
+}
+
+model EmailVerificationToken {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String    @db.Uuid
+  tokenHash String    @unique @db.Char(64)
+  expiresAt DateTime  @db.Timestamptz(3)
+  consumedAt DateTime? @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, consumedAt])
+  @@index([expiresAt])
+  @@map("email_verification_tokens")
+}
+
+model PasswordResetToken {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId     String    @db.Uuid
+  tokenHash  String    @unique @db.Char(64)
+  expiresAt  DateTime  @db.Timestamptz(3)
+  consumedAt DateTime? @db.Timestamptz(3)
+  requestedIp String?  @db.VarChar(64)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, consumedAt])
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
+}
+
+model OAuthFlow {
+  id                     String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId                 String?         @db.Uuid
+  purpose                OAuthFlowPurpose
+  codeHash               String          @unique @db.Char(64)
+  nonceHash              String?         @db.Char(64)
+  codeVerifierEncrypted  String?         @db.Text
+  redirectUri            String          @db.VarChar(1024)
+  expiresAt              DateTime        @db.Timestamptz(3)
+  consumedAt             DateTime?       @db.Timestamptz(3)
+  createdAt              DateTime        @default(now()) @db.Timestamptz(3)
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose])
+  @@index([expiresAt])
+  @@map("oauth_flows")
+}
+
+model Tenant {
+  id                     String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId                 String       @unique @db.Uuid
+  status                 TenantStatus @default(APPLICANT)
+  phone                  String?      @db.VarChar(32)
+  alternatePhone         String?      @db.VarChar(32)
+  addressLine1           String?      @db.VarChar(255)
+  addressLine2           String?      @db.VarChar(255)
+  city                   String?      @db.VarChar(120)
+  state                  String?      @db.VarChar(120)
+  postalCode             String?      @db.VarChar(24)
+  countryCode            String       @default("IN") @db.Char(2)
+  kycStatus              KycStatus    @default(NOT_SUBMITTED)
+  kycReference           String?      @db.VarChar(120)
+  kycVerifiedAt          DateTime?    @db.Timestamptz(3)
+  emergencyContactName   String?      @db.VarChar(160)
+  emergencyContactPhone  String?      @db.VarChar(32)
+  emergencyContactRelation String?    @db.VarChar(80)
+  archivedAt             DateTime?    @db.Timestamptz(3)
+  createdAt              DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt              DateTime     @updatedAt @db.Timestamptz(3)
+
+  user       User              @relation(fields: [userId], references: [id], onDelete: Restrict)
+  agreements AgreementTenant[]
+
+  @@index([status])
+  @@map("tenants")
+}
+
+model Property {
+  id              String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId         String         @db.Uuid
+  createdById     String         @db.Uuid
+  code            String         @db.VarChar(50)
+  name            String         @db.VarChar(200)
+  type            PropertyType
+  status          PropertyStatus @default(ACTIVE)
+  addressLine1    String         @db.VarChar(255)
+  addressLine2    String?        @db.VarChar(255)
+  city            String         @db.VarChar(120)
+  state           String         @db.VarChar(120)
+  postalCode      String         @db.VarChar(24)
+  countryCode     String         @default("IN") @db.Char(2)
+  timeZone        String         @default("Asia/Kolkata") @db.VarChar(64)
+  currency        String         @default("INR") @db.Char(3)
+  archivedAt      DateTime?      @db.Timestamptz(3)
+  createdAt       DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime       @updatedAt @db.Timestamptz(3)
+
+  owner             User                      @relation("PropertyOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  createdBy         User                      @relation("PropertyCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  buildings         Building[]
+  managerAssignments PropertyManagerAssignment[]
+
+  @@unique([ownerId, code])
+  @@index([ownerId, status])
+  @@index([createdAt])
+  @@map("properties")
+}
+
+model Building {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  propertyId String    @db.Uuid
+  code       String    @db.VarChar(50)
+  name       String    @db.VarChar(160)
+  archivedAt DateTime? @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  floors   Floor[]
+
+  @@unique([propertyId, code])
+  @@index([propertyId])
+  @@map("buildings")
+}
+
+model Floor {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  buildingId String    @db.Uuid
+  code       String    @db.VarChar(50)
+  name       String    @db.VarChar(120)
+  level      Int?
+  archivedAt DateTime? @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @db.Timestamptz(3)
+
+  building Building @relation(fields: [buildingId], references: [id], onDelete: Restrict)
+  rooms    Room[]
+
+  @@unique([buildingId, code])
+  @@index([buildingId])
+  @@map("floors")
+}
+
+model Room {
+  id                 String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  floorId            String                 @db.Uuid
+  number             String                 @db.VarChar(50)
+  type               RoomType
+  capacity           Int
+  baseRentAmount     Decimal                @default(0) @db.Decimal(20, 2)
+  currency           String                 @default("INR") @db.Char(3)
+  operationalStatus  RoomOperationalStatus  @default(ACTIVE)
+  archivedAt         DateTime?              @db.Timestamptz(3)
+  createdAt          DateTime               @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime               @updatedAt @db.Timestamptz(3)
+
+  floor       Floor            @relation(fields: [floorId], references: [id], onDelete: Restrict)
+  agreements  RentalAgreement[]
+  amenities   RoomAmenity[]
+
+  @@unique([floorId, number])
+  @@index([floorId, operationalStatus])
+  @@map("rooms")
+}
+
+model Amenity {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code        String   @unique @db.VarChar(60)
+  name        String   @db.VarChar(120)
+  category    String?  @db.VarChar(80)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+
+  rooms RoomAmenity[]
+
+  @@index([category, isActive])
+  @@map("amenities")
+}
+
+model RoomAmenity {
+  roomId      String   @db.Uuid
+  amenityId   String   @db.Uuid
+  addedById   String   @db.Uuid
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  room    Room    @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  amenity Amenity @relation(fields: [amenityId], references: [id], onDelete: Restrict)
+  addedBy User    @relation("RoomAmenityAddedBy", fields: [addedById], references: [id], onDelete: Restrict)
+
+  @@id([roomId, amenityId])
+  @@index([amenityId])
+  @@map("room_amenities")
+}
+
+model PropertyManagerAssignment {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  propertyId     String    @db.Uuid
+  managerUserId  String    @db.Uuid
+  createdById    String    @db.Uuid
+  startDate      DateTime  @db.Date
+  endDate        DateTime? @db.Date
+  revokedAt      DateTime? @db.Timestamptz(3)
+  createdAt      DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime  @updatedAt @db.Timestamptz(3)
+
+  property    Property                   @relation(fields: [propertyId], references: [id], onDelete: Restrict)
+  managerUser User                       @relation("ManagerUser", fields: [managerUserId], references: [id], onDelete: Restrict)
+  createdBy   User                       @relation("ManagerAssignmentCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  permissions PropertyManagerPermission[]
+
+  @@index([managerUserId, startDate, endDate])
+  @@index([propertyId])
+  @@map("property_manager_assignments")
+}
+
+model PropertyManagerPermission {
+  assignmentId String            @db.Uuid
+  permission   ManagerPermission
+  createdAt    DateTime          @default(now()) @db.Timestamptz(3)
+
+  assignment PropertyManagerAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  @@id([assignmentId, permission])
+  @@map("property_manager_permissions")
+}
+
+model RentalAgreement {
+  id                    String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  roomId                String          @db.Uuid
+  createdById           String          @db.Uuid
+  status                AgreementStatus @default(DRAFT)
+  startDate             DateTime        @db.Date
+  endDate               DateTime        @db.Date
+  monthlyRentAmount     Decimal         @db.Decimal(20, 2)
+  securityDepositAmount Decimal         @db.Decimal(20, 2)
+  currency              String          @default("INR") @db.Char(3)
+  noticePeriodDays      Int             @default(30)
+  activatedAt           DateTime?       @db.Timestamptz(3)
+  terminatedAt          DateTime?       @db.Timestamptz(3)
+  terminationReason     String?         @db.VarChar(500)
+  createdAt             DateTime        @default(now()) @db.Timestamptz(3)
+  updatedAt             DateTime        @updatedAt @db.Timestamptz(3)
+
+  room      Room               @relation(fields: [roomId], references: [id], onDelete: Restrict)
+  createdBy User               @relation("AgreementCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  tenants   AgreementTenant[]
+
+  @@index([roomId, status])
+  @@index([status, endDate])
+  @@map("rental_agreements")
+}
+
+model AgreementTenant {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  agreementId String   @db.Uuid
+  tenantId    String   @db.Uuid
+  isPrimary   Boolean  @default(false)
+  startDate   DateTime @db.Date
+  endDate     DateTime @db.Date
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+
+  agreement RentalAgreement @relation(fields: [agreementId], references: [id], onDelete: Restrict)
+  tenant    Tenant          @relation(fields: [tenantId], references: [id], onDelete: Restrict)
+
+  @@unique([agreementId, tenantId, startDate])
+  @@index([tenantId, startDate, endDate])
+  @@index([agreementId])
+  @@map("agreement_tenants")
+}
+
+model AuditLog {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  actorUserId String?  @db.Uuid
+  action      String   @db.VarChar(100)
+  resourceType String  @db.VarChar(100)
+  resourceId  String?  @db.Uuid
+  requestId   String?  @db.VarChar(128)
+  ipAddress   String?  @db.VarChar(64)
+  userAgent   String?  @db.Text
+  metadata    Json     @default("{}")
+  occurredAt  DateTime @default(now()) @db.Timestamptz(3)
+
+  actor User? @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: Restrict)
+
+  @@index([actorUserId, occurredAt])
+  @@index([resourceType, resourceId, occurredAt])
+  @@index([action, occurredAt])
+  @@index([requestId])
+  @@map("audit_logs")
+}
